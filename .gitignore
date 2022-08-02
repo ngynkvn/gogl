@@ -1,0 +1,5 @@
+game
+main.*
+*log
+.vscode
+SDL2.dll
