@@ -3,14 +3,18 @@ package main
 import (
 	"fmt"
 	shaders "game/gen"
-	"math"
+	parser "game/parsers"
+
 	"os"
 	"runtime"
 	"strings"
 	"time"
 	"unsafe"
 
+	"github.com/chewxy/math32"
+	"github.com/engoengine/glm"
 	gl "github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/rs/zerolog/log"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -40,7 +44,7 @@ func CreateShader(shaderType Shader, source string) (Shader, error) {
 		gl.GetShaderInfoLog(s, logLength, nil, gl.Str(log))
 		return 0, fmt.Errorf("failed to compile source %v:\n=====\n%v====", source, log)
 	} else if status == gl.TRUE {
-		fmt.Printf("Compiled Shader✅: %v\n", s)
+		log.Printf("Compiled Shader✅: %v\n", s)
 	}
 	return Shader(s), nil
 }
@@ -49,13 +53,23 @@ func createprogram() uint32 {
 	// VERTEX SHADER
 	vs, err := CreateShader(gl.VERTEX_SHADER, shaders.BasicVertexShader)
 	if err != nil {
-		fmt.Println(err)
+		log.Printf(`(source)
+		%v
+		==================
+		(err reported)
+		%v
+		`, shaders.BasicVertexShader, err)
 	}
 
 	// FRAGMENT SHADER
 	fs, err := CreateShader(gl.FRAGMENT_SHADER, shaders.BasicFragmentShader)
 	if err != nil {
-		fmt.Println(err)
+		log.Printf(`(source)
+		%v
+		==================
+		(err reported)
+		%v
+		`, shaders.BasicFragmentShader, err)
 	}
 
 	// CREATE PROGRAM
@@ -72,23 +86,19 @@ func createprogram() uint32 {
 		var logLength int32
 		gl.GetProgramiv(program, gl.INFO_LOG_LENGTH, &logLength)
 
-		log := strings.Repeat("\x00", int(logLength+1))
-		gl.GetProgramInfoLog(program, logLength, nil, gl.Str(log))
+		lg := strings.Repeat("\x00", int(logLength+1))
+		gl.GetProgramInfoLog(program, logLength, nil, gl.Str(lg))
 
-		println(fmt.Errorf("failed to compile:\n %v\n++++++++", log))
+		log.Printf("%v", fmt.Errorf("failed to compile:\n %v\n++++++++", lg))
 	}
 
 	return program
 }
 
-var uniRoll float32 = 0.0
-var uniYaw float32 = 1.0
-var uniPitch float32 = 0.0
-var uniscale float32 = 0.3
-var yrot float32 = 20.0
-var zrot float32 = 0.0
-var xrot float32 = 0.0
 var UniScale int32
+var Model int32
+var View int32
+var Projection int32
 
 func glDebugCallback(
 	source uint32,
@@ -103,6 +113,12 @@ func glDebugCallback(
 		"Debug (source: %d, type: %d severity: %d): %s\n",
 		source, gltype, severity, message)
 }
+
+var cameraPos = glm.Vec3{0.0, 0.0, 3.0}
+var cameraFront = glm.Vec3{0.0, 0.0, -1.0}
+var cameraUp = glm.Vec3{0.0, 1.0, 0.0}
+var dx float32 = 0.0
+var dy float32 = 0.0
 
 func main() {
 	var window *sdl.Window
@@ -123,6 +139,7 @@ func main() {
 		panic(err)
 	}
 	defer window.Destroy()
+	sdl.SetRelativeMouseMode(true)
 	context, err = window.GLCreateContext()
 	if err != nil {
 		panic(err)
@@ -131,7 +148,6 @@ func main() {
 
 	gl.Init()
 	gl.Enable(gl.DEBUG_OUTPUT)
-
 	gl.DebugMessageCallback(glDebugCallback, nil)
 	gl.Viewport(0, 0, winWidth, winHeight)
 	// OPENGL FLAGS
@@ -141,17 +157,28 @@ func main() {
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
+	// Oh god
+	objParser := parser.NewObjParser()
+	parsed := objParser.Parse("assets/b.obj")
+	vertices := make([]float32, 0)
+	for _, v := range parsed.Faces {
+		v1, v2, v3 := parsed.Vertices[v[0]-1], parsed.Vertices[v[1]-1], parsed.Vertices[v[2]-1]
+		vertices = append(vertices, v1[:]...)
+		vertices = append(vertices, v2[:]...)
+		vertices = append(vertices, v3[:]...)
+	}
+
 	// VERTEX BUFFER
 	var vertexbuffer uint32
 	gl.GenBuffers(1, &vertexbuffer)
 	gl.BindBuffer(gl.ARRAY_BUFFER, vertexbuffer)
-	gl.BufferData(gl.ARRAY_BUFFER, len(triangle_vertices)*4, gl.Ptr(triangle_vertices), gl.STATIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
 
 	// COLOUR BUFFER
 	var colourbuffer uint32
 	gl.GenBuffers(1, &colourbuffer)
 	gl.BindBuffer(gl.ARRAY_BUFFER, colourbuffer)
-	gl.BufferData(gl.ARRAY_BUFFER, len(triangle_colours)*4, gl.Ptr(triangle_colours), gl.STATIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
 
 	// GUESS WHAT
 	version := gl.GoStr(gl.GetString(gl.VERSION))
@@ -171,12 +198,20 @@ func main() {
 	gl.BindBuffer(gl.ARRAY_BUFFER, colourbuffer)
 	gl.VertexAttribPointer(1, 3, gl.FLOAT, false, 0, nil)
 
-	//UNIFORM HOOK
-	unistring := gl.Str("scaleMove\x00")
-	UniScale = gl.GetUniformLocation(program, unistring)
-	fmt.Printf("Uniform Link: %v\n", UniScale+1)
-
 	gl.UseProgram(program)
+
+	//UNIFORM HOOK
+	sm := gl.Str("model\x00")
+	Model = gl.GetUniformLocation(program, sm)
+	log.Printf("[*]Uniform location fetched: %v\n", Model)
+
+	v := gl.Str("view\x00")
+	View = gl.GetUniformLocation(program, v)
+	log.Printf("[*]Uniform location fetched: %v\n", View)
+
+	p := gl.Str("projection\x00")
+	Projection = gl.GetUniformLocation(program, p)
+	log.Printf("[*]Uniform location fetched: %v\n", Projection)
 
 	running = true
 	for running {
@@ -186,32 +221,77 @@ func main() {
 			case *sdl.QuitEvent:
 				running = false
 			case *sdl.MouseMotionEvent:
-
-				xrot = float32(t.Y) / 2
-				yrot = float32(t.X) / 2
 				fmt.Printf("[%dms]MouseMotion\tid:%d\tx:%d\ty:%d\txrel:%d\tyrel:%d\n", t.Timestamp, t.Which, t.X, t.Y, t.XRel, t.YRel)
+				dx = float32(t.XRel)
+				dy = float32(t.YRel)
+			case *sdl.KeyboardEvent:
+				switch t.Keysym.Sym {
+				case sdl.K_w:
+					v := cameraFront.Mul(0.1)
+					cameraPos = cameraPos.Add(&v)
+				case sdl.K_s:
+					v := cameraFront.Mul(0.1)
+					cameraPos = cameraPos.Sub(&v)
+				case sdl.K_a:
+					nv := glm.NormalizeVec3(cameraFront.Cross(&cameraUp))
+					v := nv.Mul(0.1)
+					cameraPos = cameraPos.Sub(&v)
+				case sdl.K_d:
+					nv := glm.NormalizeVec3(cameraFront.Cross(&cameraUp))
+					v := nv.Mul(0.1)
+					cameraPos = cameraPos.Add(&v)
+				}
 			}
 		}
-		drawgl()
+		drawgl(len(vertices))
+		dx = 0
+		dy = 0
 		window.GLSwap()
 	}
 }
 
-func drawgl() {
+func CheckGLErrors() {
+	errCode := gl.GetError()
+	if errCode == gl.NO_ERROR {
+		return
+	}
+
+}
+
+var yaw float32 = 0.0
+var pitch float32 = 0.0
+
+func drawgl(n int) {
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
-	uniYaw = yrot * (math.Pi / 180.0)
-	yrot = yrot - 1.0
-	uniPitch = zrot * (math.Pi / 180.0)
-	zrot = zrot - 0.5
-	uniRoll = xrot * (math.Pi / 180.0)
-	xrot = xrot - 0.2
+	yaw += dx
+	pitch += dy
+	if pitch > 89.0 {
+		pitch = 89.0
+	}
+	if pitch < -89.0 {
+		pitch = -89.0
+	}
 
-	gl.Uniform4f(UniScale, uniRoll, uniYaw, uniPitch, uniscale)
+	direction := glm.Vec3{}
+	direction[0] = math32.Cos(glm.DegToRad(yaw)) * math32.Cos(glm.DegToRad(pitch))
+	direction[1] = math32.Sin(glm.DegToRad(pitch))
+	direction[2] = math32.Sin(glm.DegToRad(yaw)) * math32.Cos(glm.DegToRad(pitch))
+	cameraFront = glm.NormalizeVec3(direction)
+
+	view := glm.LookAtV(&cameraPos, &cameraFront, &cameraUp)
+	gl.UniformMatrix4fv(View, 1, false, &view[0])
+
+	projection := glm.Perspective(glm.DegToRad(45.0), float32(winWidth)/float32(winHeight), 0.1, 100.0)
+	gl.UniformMatrix4fv(Projection, 1, false, &projection[0])
+
+	model := glm.Ident4()
+	gl.UniformMatrix4fv(Model, 1, false, &model[0])
+
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-	gl.DrawArrays(gl.TRIANGLES, 0, int32(len(triangle_vertices)*4))
+	gl.DrawArrays(gl.TRIANGLES, 0, int32(n*4))
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(16 * time.Millisecond)
 
 }
 
@@ -220,79 +300,3 @@ const (
 	winWidth  = 640
 	winHeight = 480
 )
-
-var triangle_vertices = []float32{
-	-1.0, -1.0, -1.0,
-	-1.0, -1.0, 1.0,
-	-1.0, 1.0, 1.0,
-	1.0, 1.0, -1.0,
-	-1.0, -1.0, -1.0,
-	-1.0, 1.0, -1.0,
-	1.0, -1.0, 1.0,
-	-1.0, -1.0, -1.0,
-	1.0, -1.0, -1.0,
-	1.0, 1.0, -1.0,
-	1.0, -1.0, -1.0,
-	-1.0, -1.0, -1.0,
-	-1.0, -1.0, -1.0,
-	-1.0, 1.0, 1.0,
-	-1.0, 1.0, -1.0,
-	1.0, -1.0, 1.0,
-	-1.0, -1.0, 1.0,
-	-1.0, -1.0, -1.0,
-	-1.0, 1.0, 1.0,
-	-1.0, -1.0, 1.0,
-	1.0, -1.0, 1.0,
-	1.0, 1.0, 1.0,
-	1.0, -1.0, -1.0,
-	1.0, 1.0, -1.0,
-	1.0, -1.0, -1.0,
-	1.0, 1.0, 1.0,
-	1.0, -1.0, 1.0,
-	1.0, 1.0, 1.0,
-	1.0, 1.0, -1.0,
-	-1.0, 1.0, -1.0,
-	1.0, 1.0, 1.0,
-	-1.0, 1.0, -1.0,
-	-1.0, 1.0, 1.0,
-	1.0, 1.0, 1.0,
-	-1.0, 1.0, 1.0,
-	1.0, -1.0, 1.0}
-
-var triangle_colours = []float32{
-	0.583, 0.771, 0.014,
-	0.609, 0.115, 0.436,
-	0.327, 0.483, 0.844,
-	0.822, 0.569, 0.201,
-	0.435, 0.602, 0.223,
-	0.310, 0.747, 0.185,
-	0.597, 0.770, 0.761,
-	0.559, 0.436, 0.730,
-	0.359, 0.583, 0.152,
-	0.483, 0.596, 0.789,
-	0.559, 0.861, 0.639,
-	0.195, 0.548, 0.859,
-	0.014, 0.184, 0.576,
-	0.771, 0.328, 0.970,
-	0.406, 0.615, 0.116,
-	0.676, 0.977, 0.133,
-	0.971, 0.572, 0.833,
-	0.140, 0.616, 0.489,
-	0.997, 0.513, 0.064,
-	0.945, 0.719, 0.592,
-	0.543, 0.021, 0.978,
-	0.279, 0.317, 0.505,
-	0.167, 0.620, 0.077,
-	0.347, 0.857, 0.137,
-	0.055, 0.953, 0.042,
-	0.714, 0.505, 0.345,
-	0.783, 0.290, 0.734,
-	0.722, 0.645, 0.174,
-	0.302, 0.455, 0.848,
-	0.225, 0.587, 0.040,
-	0.517, 0.713, 0.338,
-	0.053, 0.959, 0.120,
-	0.393, 0.621, 0.362,
-	0.673, 0.211, 0.457,
-	0.820, 0.883, 0.371,
-	0.982, 0.099, 0.879}
