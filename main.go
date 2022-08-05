@@ -5,16 +5,14 @@ import (
 	shaders "game/gen"
 	parser "game/parsers"
 
-	"os"
+	"game/log"
 	"runtime"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/chewxy/math32"
 	"github.com/engoengine/glm"
 	gl "github.com/go-gl/gl/v4.1-core/gl"
-	"github.com/rs/zerolog/log"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -23,11 +21,7 @@ import (
 
 type Shader = uint32
 
-// Use this as a sanity check on opengl context
-func printversion() {
-	version := gl.GoStr(gl.GetString(gl.VERSION))
-	fmt.Println("OpenGL version", version)
-}
+var logger = log.Logger()
 
 func CreateShader(shaderType Shader, source string) (Shader, error) {
 	s := gl.CreateShader(shaderType)
@@ -44,7 +38,7 @@ func CreateShader(shaderType Shader, source string) (Shader, error) {
 		gl.GetShaderInfoLog(s, logLength, nil, gl.Str(log))
 		return 0, fmt.Errorf("failed to compile source %v:\n=====\n%v====", source, log)
 	} else if status == gl.TRUE {
-		log.Printf("Compiled Shader✅: %v\n", s)
+		logger.Debugf("Compiled Shader✅: %v\n", s)
 	}
 	return Shader(s), nil
 }
@@ -53,7 +47,7 @@ func createprogram() uint32 {
 	// VERTEX SHADER
 	vs, err := CreateShader(gl.VERTEX_SHADER, shaders.BasicVertexShader)
 	if err != nil {
-		log.Printf(`(source)
+		logger.Debugf(`(source)
 		%v
 		==================
 		(err reported)
@@ -64,7 +58,7 @@ func createprogram() uint32 {
 	// FRAGMENT SHADER
 	fs, err := CreateShader(gl.FRAGMENT_SHADER, shaders.BasicFragmentShader)
 	if err != nil {
-		log.Printf(`(source)
+		logger.Debugf(`(source)
 		%v
 		==================
 		(err reported)
@@ -89,7 +83,7 @@ func createprogram() uint32 {
 		lg := strings.Repeat("\x00", int(logLength+1))
 		gl.GetProgramInfoLog(program, logLength, nil, gl.Str(lg))
 
-		log.Printf("%v", fmt.Errorf("failed to compile:\n %v\n++++++++", lg))
+		logger.Debugf("%v", fmt.Errorf("failed to compile:\n %v\n++++++++", lg))
 	}
 
 	return program
@@ -99,20 +93,6 @@ var UniScale int32
 var Model int32
 var View int32
 var Projection int32
-
-func glDebugCallback(
-	source uint32,
-	gltype uint32,
-	id uint32,
-	severity uint32,
-	length int32,
-	message string,
-	userParam unsafe.Pointer) {
-	fmt.Fprintf(
-		os.Stderr,
-		"Debug (source: %d, type: %d severity: %d): %s\n",
-		source, gltype, severity, message)
-}
 
 var cameraPos = glm.Vec3{0.0, 0.0, 3.0}
 var cameraFront = glm.Vec3{0.0, 0.0, -1.0}
@@ -203,15 +183,15 @@ func main() {
 	//UNIFORM HOOK
 	sm := gl.Str("model\x00")
 	Model = gl.GetUniformLocation(program, sm)
-	log.Printf("[*]Uniform location fetched: %v\n", Model)
+	logger.Debugf("[*]Uniform location fetched: %v\n", Model)
 
 	v := gl.Str("view\x00")
 	View = gl.GetUniformLocation(program, v)
-	log.Printf("[*]Uniform location fetched: %v\n", View)
+	logger.Debugf("[*]Uniform location fetched: %v\n", View)
 
 	p := gl.Str("projection\x00")
 	Projection = gl.GetUniformLocation(program, p)
-	log.Printf("[*]Uniform location fetched: %v\n", Projection)
+	logger.Debugf("[*]Uniform location fetched: %v\n", Projection)
 
 	running = true
 	for running {

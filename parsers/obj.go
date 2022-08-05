@@ -2,11 +2,13 @@ package parser
 
 import (
 	"bufio"
-	"log"
+	"game/log"
 	"os"
 	"strconv"
 	"strings"
 )
+
+var logger = log.Logger()
 
 type Vertex [3]float32
 type Index [3]uint32
@@ -40,14 +42,14 @@ func Map[T any, K any](input []T, fn func(t T) K) []K {
 func convF32(f string) float32 {
 	r, e := strconv.ParseFloat(f, 32)
 	if e != nil {
-		log.Fatal(e)
+		logger.Fatal(e)
 	}
 	return float32(r)
 }
 func convU32(f string) uint32 {
 	r, e := strconv.ParseUint(f, 10, 32)
 	if e != nil {
-		log.Fatal(e)
+		logger.Fatal(e)
 	}
 	return uint32(r)
 }
@@ -66,14 +68,14 @@ func (obj *ObjParser) parseline(txt string) LineType {
 	case "#":
 		return LineType(C)
 	}
-	log.Fatalf("Yo wtf is %v", txt)
+	logger.Fatalf("Yo wtf is %v", txt)
 	panic(69)
 }
 
 func (obj *ObjParser) Parse(filepath string) Obj {
 	readFile, err := os.Open(filepath)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	fileScanner := bufio.NewScanner(readFile)
 	fileScanner.Split(bufio.ScanLines)
@@ -84,7 +86,7 @@ func (obj *ObjParser) Parse(filepath string) Obj {
 	}
 	err = readFile.Close()
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	return obj.Obj
 }
